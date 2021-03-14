@@ -1,2 +1,2 @@
 # ssl_seg
-Semi-supervised semantic for segmentation
+Semi-supervised semantic segmentation for medical imaging
