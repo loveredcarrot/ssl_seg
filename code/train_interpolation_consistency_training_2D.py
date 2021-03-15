@@ -270,7 +270,7 @@ def train(args, snapshot_path):
                                                   'iter_{}_dice_{}.pth'.format(
                                                       iter_num, round(best_performance, 4)))
                     save_student_mode_path = os.path.join(
-                        snapshot_path, 'iter_' + 'stu' + str(iter_num) + '.pth')
+                        snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                     save_best = os.path.join(snapshot_path,
                                              '{}_best_model.pth'.format(args.model))
                     time.sleep(10)
@@ -290,7 +290,7 @@ def train(args, snapshot_path):
                 save_mode_path = os.path.join(
                     snapshot_path, 'iter_' + str(iter_num) + '.pth')
                 save_student_mode_path = os.path.join(
-                    snapshot_path, 'iter_' + 'stu' + str(iter_num) + '.pth')
+                    snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                 time.sleep(10)
                 torch.save(model.state_dict(), save_student_mode_path)
                 torch.save(ema_model.state_dict(), save_mode_path)

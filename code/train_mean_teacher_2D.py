@@ -80,6 +80,11 @@ parser.add_argument('--consistency', type=float,
                     default=0.1, help='consistency')
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
+parser.add_argument('--noise_variance', type=float,
+                    default=0.01, help='the gaussian noise variance')
+parser.add_argument('--noise_range', type=float,
+                    default=0.1, help='the range of gaussian noise')
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -108,6 +113,8 @@ def train(args, snapshot_path):
     iters_per_epoch = args.iters_per_epoch
     labeled_bs = args.labeled_bs
     unlabeled_bs = batch_size - labeled_bs
+    noise_variance = args.noise_variance
+    noise_range = args.noise_range
 
     # Build network
     def create_model(ema=False):
@@ -181,10 +188,12 @@ def train(args, snapshot_path):
             unlabeled_volume_batch = unlabeled_sampled_batch['image']
             unlabeled_volume_batch = unlabeled_volume_batch.cuda()
 
-            # noise = torch.clamp(torch.randn_like(
-            #     unlabeled_volume_batch) * 0.01, -0.05, 0.05)
-            # ema_inputs = unlabeled_volume_batch + noise
-            ema_inputs = unlabeled_volume_batch
+            if noise_variance > 0.00001:
+                noise = torch.clamp(torch.randn_like(
+                    unlabeled_volume_batch) * noise_variance, -noise_range, noise_range)
+                ema_inputs = unlabeled_volume_batch + noise
+            else:
+                ema_inputs = unlabeled_volume_batch
 
             labeled_outputs = model(labeled_volume_batch)
             labeled_outputs_soft = torch.softmax(labeled_outputs, dim=1)
@@ -252,7 +261,7 @@ def train(args, snapshot_path):
                                                   'iter_{}_dice_{}.pth'.format(
                                                       iter_num, round(best_performance, 4)))
                     save_student_mode_path = os.path.join(
-                        snapshot_path, 'iter_' + 'stu' + str(iter_num) + '.pth')
+                        snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                     save_best = os.path.join(snapshot_path,
                                              '{}_best_model.pth'.format(args.model))
                     time.sleep(10)
@@ -272,7 +281,7 @@ def train(args, snapshot_path):
                 save_mode_path = os.path.join(
                     snapshot_path, 'iter_' + str(iter_num) + '.pth')
                 save_student_mode_path = os.path.join(
-                    snapshot_path, 'iter_' + 'stu' + str(iter_num) + '.pth')
+                    snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                 time.sleep(10)
                 torch.save(model.state_dict(), save_student_mode_path)
                 torch.save(ema_model.state_dict(), save_mode_path)

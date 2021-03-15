@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--csv_path', type=str,
                     default='../csv_data/', help='root path of csv_data')
 parser.add_argument('--exp', type=str,
-                    default='/Uncertainty_Aware_Mean_Teacher', help='experiment_name')
+                    default='/CutMix', help='experiment_name')
 parser.add_argument('--model', type=str,
                     default='LinkNetBaseWithDrop', help='model_name')
 parser.add_argument('--num_classes', type=int, default=2,
@@ -80,10 +80,11 @@ parser.add_argument('--consistency', type=float,
                     default=0.1, help='consistency')
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
-parser.add_argument('--noise_variance', type=float,
-                    default=0.01, help='the gaussian noise variance')
-parser.add_argument('--noise_range', type=float,
-                    default=0.1, help='the range of gaussian noise')
+
+# mask proportion range
+parser.add_argument('--mask_prop_range', type=float, default=0.5,
+                    help='mask proportion range')
+
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -112,8 +113,7 @@ def train(args, snapshot_path):
     iters_per_epoch = args.iters_per_epoch
     labeled_bs = args.labeled_bs
     unlabeled_bs = batch_size - labeled_bs
-    noise_variance = args.noise_variance
-    noise_range = args.noise_range
+    mask_prop_range = args.mask_prop_range
 
     # Build network
     def create_model(ema=False):
@@ -187,38 +187,37 @@ def train(args, snapshot_path):
             unlabeled_volume_batch = unlabeled_sampled_batch['image']
             unlabeled_volume_batch = unlabeled_volume_batch.cuda()
 
-            noise = torch.clamp(torch.randn_like(
-                unlabeled_volume_batch) * noise_variance, -noise_range, noise_range)
-            ema_inputs = unlabeled_volume_batch + noise
+            # Convert mask parameters to masks of shape (N,1,H,W)
+            batch_mix_masks = torch.ones(unlabeled_volume_batch.shape[0] // 2, 1, unlabeled_volume_batch.shape[2],
+                                         unlabeled_volume_batch.shape[3])
+            batch_mix_masks[:, :,
+            int((batch_mix_masks.shape[2] - mask_prop_range * batch_mix_masks.shape[2]) // 2) \
+            :int((batch_mix_masks.shape[2] + mask_prop_range * batch_mix_masks.shape[2])) // 2,
+            int((batch_mix_masks.shape[3] - mask_prop_range * batch_mix_masks.shape[3]) // 2) \
+            :int((batch_mix_masks.shape[3] + mask_prop_range * batch_mix_masks.shape[3]) // 2)
+            ] = 0
+            batch_mix_masks = batch_mix_masks.cuda()
+
+            unlabeled_volume_batch_0 = unlabeled_volume_batch[0:unlabeled_bs // 2, ...]
+            unlabeled_volume_batch_1 = unlabeled_volume_batch[unlabeled_bs // 2:, ...]
+
+            # Mix images with masks
+            batch_ux_mixed = unlabeled_volume_batch_0 * \
+                             (1.0 - batch_mix_masks) + \
+                             unlabeled_volume_batch_1 * batch_mix_masks
 
             labeled_outputs = model(labeled_volume_batch)
             labeled_outputs_soft = torch.softmax(labeled_outputs, dim=1)
-            unlabeled_outputs = model(unlabeled_volume_batch)
+            unlabeled_outputs = model(batch_ux_mixed)
             unlabeled_outputs_soft = torch.softmax(unlabeled_outputs, dim=1)
 
             with torch.no_grad():
-                ema_output = ema_model(ema_inputs)
-                ema_output_soft = torch.softmax(ema_output, dim=1)
-
-            T = 8
-            _, _, w, h = unlabeled_volume_batch.shape
-            unlabeled_volume_batch_r = unlabeled_volume_batch.repeat(2, 1, 1, 1)
-            stride = unlabeled_volume_batch_r.shape[0] // 2
-            preds = torch.zeros([stride * T, num_classes, w, h]).cuda()
-
-            for i in range(T // 2):
-                ema_inputs = unlabeled_volume_batch_r + \
-                             torch.clamp(torch.randn_like(
-                                 unlabeled_volume_batch_r) * noise_variance, -noise_range, noise_range)
-
-                with torch.no_grad():
-                    preds[2 * stride * i:2 * stride *
-                                         (i + 1)] = ema_model(ema_inputs)
-            preds = F.softmax(preds, dim=1)
-            preds = preds.reshape(T, stride, num_classes, w, h)
-            preds = torch.mean(preds, dim=0)
-            uncertainty = -1.0 * \
-                          torch.sum(preds * torch.log(preds + 1e-6), dim=1, keepdim=True)
+                ema_output_ux0 = torch.softmax(
+                    ema_model(unlabeled_volume_batch_0), dim=1)
+                ema_output_ux1 = torch.softmax(
+                    ema_model(unlabeled_volume_batch_1), dim=1)
+                batch_pred_mixed = ema_output_ux0 * \
+                                   (1.0 - batch_mix_masks) + ema_output_ux1 * batch_mix_masks
 
             # supervised_loss
             loss_ce = ce_loss(labeled_outputs, label_batch[:].long())
@@ -227,13 +226,7 @@ def train(args, snapshot_path):
 
             # unsupervised_loss
             consistency_weight = get_current_consistency_weight(epoch_num)
-            consistency_dist = losses.softmax_mse_loss(
-                unlabeled_outputs, ema_output)  # (batch, 2,512,512)
-            threshold = (0.75 + 0.25 * ramps.sigmoid_rampup(iter_num,
-                                                            max_iterations)) * np.log(2)
-            mask = (uncertainty < threshold).float()
-            consistency_loss = torch.sum(
-                mask * consistency_dist) / (2 * torch.sum(mask) + 1e-16)
+            consistency_loss = torch.mean((unlabeled_outputs_soft - batch_pred_mixed) ** 2)
 
             # total loss
             loss = supervised_loss + consistency_weight * consistency_loss
@@ -307,8 +300,6 @@ def train(args, snapshot_path):
                 time.sleep(10)
                 torch.save(model.state_dict(), save_student_mode_path)
                 torch.save(ema_model.state_dict(), save_mode_path)
-
-                logging.info("save model to {}".format(save_mode_path))
 
             if iter_num >= max_iterations:
                 break
