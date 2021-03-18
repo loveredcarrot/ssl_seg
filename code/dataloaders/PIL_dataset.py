@@ -28,13 +28,17 @@ import time
 
 # assume you have txt file(image_path,label_path)
 class BaseDataSets(Dataset):
-    def __init__(self, base_dir=None, csv_path=None, split='val', crop_size=(512, 512), num=None, target_mpp=None):
+    def __init__(self, base_dir=None, csv_path=None, split='val', crop_size=(512, 512), num=None, target_mpp=None,
+                 is_normalize=False, mean=[0.810, 0.811, 0.816], std=[0.109, 0.111, 0.109]):
         self.base_dir = base_dir
         self.csv_path = os.path.join(base_dir, csv_path)
         self.split = split
         self.crop_size = crop_size
         self.target_mpp = target_mpp
         self.sample_list = []
+        self.is_normalize = is_normalize
+        self.mean = mean
+        self.std = std
         if os.path.isfile(self.csv_path):
             with open(self.csv_path, 'r') as f:
                 self.sample_list = f.readlines()
@@ -74,6 +78,9 @@ class BaseDataSets(Dataset):
             image = image.resize((resize_shape, resize_shape))
             label = label.resize((resize_shape, resize_shape))
         image = tf.to_tensor(image).type(torch.FloatTensor)
+        if self.is_normalize == True:
+            normalize = transforms.Normalize(mean=self.mean, std=self.std)
+            image = normalize(image)
         label = tf.to_tensor(label).type(torch.ByteTensor)
         label = label.squeeze(0)
         sample = {'image': image, 'label': label}
@@ -154,6 +161,7 @@ def grouper(iterable, n):
     # grouper('ABCDEFG', 3) --> ABC DEF"
     args = [iter(iterable)] * n
     return zip(*args)
+
 
 # https://arxiv.org/abs/1906.01916v5
 class RepeatSampler(Sampler):

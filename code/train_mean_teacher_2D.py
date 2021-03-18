@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--csv_path', type=str,
                     default='../csv_data/', help='root path of csv_data')
 parser.add_argument('--exp', type=str,
-                    default='/Mean_teacher_3_10', help='experiment_name')
+                    default='/Mean_teacher', help='experiment_name')
 parser.add_argument('--model', type=str,
                     default='LinkNetBaseWithDrop', help='model_name')
 parser.add_argument('--num_classes', type=int, default=2,
@@ -57,6 +57,8 @@ parser.add_argument('--patch_size', type=list, default=[512, 512],
                     help='patch size of network input')
 parser.add_argument('--seed', type=int, default=1337, help='random seed')
 parser.add_argument('--gpu', type=str, default='0', help='GPU to use')
+parser.add_argument('--normalize', type=bool, default=False,
+                    help='whether use normalize')
 
 # train data path and val data path
 parser.add_argument('--labeled_bs', type=int, default=50,
@@ -72,14 +74,17 @@ parser.add_argument('--unlabeled_csv', type=str, default='train_unlabeled_8462.t
 parser.add_argument('--val_data', type=str, default='val_no_negative.txt',
                     help='val_data_path')
 
-# costs
-parser.add_argument('--ema_decay', type=float, default=0.999, help='ema_decay')
+
+# Mean teacher parameters
+parser.add_argument('--ema_decay', type=float, default=0.99, help='ema_decay')
 parser.add_argument('--consistency_type', type=str,
                     default="mse", help='consistency_type')
 parser.add_argument('--consistency', type=float,
-                    default=0.1, help='consistency')
+                    default=1, help='consistency')
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
+
+# Gaussian noise
 parser.add_argument('--noise_variance', type=float,
                     default=0.01, help='the gaussian noise variance')
 parser.add_argument('--noise_range', type=float,
@@ -103,7 +108,7 @@ def update_ema_variables(model, ema_model, alpha, global_step):
 
 
 def train(args, snapshot_path):
-    # Load parameter
+    # Load parameters
     base_lr = args.base_lr
     num_classes = args.num_classes
     batch_size = args.batch_size
@@ -111,6 +116,7 @@ def train(args, snapshot_path):
     max_epochs = args.num_epochs
     labeled_case = args.labeled_num
     iters_per_epoch = args.iters_per_epoch
+    is_normalize = args.normalize
     labeled_bs = args.labeled_bs
     unlabeled_bs = batch_size - labeled_bs
     noise_variance = args.noise_variance
@@ -128,6 +134,8 @@ def train(args, snapshot_path):
 
     model = create_model()
     ema_model = create_model(ema=True)
+    model = model.cuda()
+    ema_model = ema_model.cuda()
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
@@ -136,17 +144,21 @@ def train(args, snapshot_path):
     db_sup_train = BaseDataSets(base_dir=args.csv_path,
                                 csv_path=args.labeled_csv, split='train',
                                 crop_size=args.patch_size,
-                                num=None, target_mpp=0.848)
+                                num=None, target_mpp=0.848,
+                                is_normalize=is_normalize)
 
     db_unsup_train = BaseDataSets(base_dir=args.csv_path,
                                   csv_path=args.unlabeled_csv, split='train',
                                   crop_size=args.patch_size,
-                                  num=None, target_mpp=0.848)
+                                  num=None, target_mpp=0.848,
+                                  is_normalize=is_normalize)
 
-    db_val = BaseDataSets(base_dir=args.csv_path, csv_path=args.val_data,
-                          split='val', num=None, target_mpp=0.848)
+    db_val = BaseDataSets(base_dir=args.csv_path,
+                          csv_path=args.val_data, split='val',
+                          num=None, target_mpp=0.848,
+                          is_normalize = is_normalize)
 
-    print("Total silices is: {}, labeled slices is: {}, unlabeled slices is: {}".format(
+    print("Total slices is: {}, labeled slices is: {}, unlabeled slices is: {}".format(
         8548, args.labeled_csv, args.unlabeled_csv))
 
     # train data and val data pipeline: data loaders
@@ -264,7 +276,7 @@ def train(args, snapshot_path):
                         snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                     save_best = os.path.join(snapshot_path,
                                              '{}_best_model.pth'.format(args.model))
-                    time.sleep(10)
+                    time.sleep(1)
                     torch.save(ema_model.state_dict(), save_mode_path)
                     torch.save(model.state_dict(), save_student_mode_path)
                     torch.save(ema_model.state_dict(), save_best)
@@ -282,7 +294,7 @@ def train(args, snapshot_path):
                     snapshot_path, 'iter_' + str(iter_num) + '.pth')
                 save_student_mode_path = os.path.join(
                     snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
-                time.sleep(10)
+                time.sleep(1)
                 torch.save(model.state_dict(), save_student_mode_path)
                 torch.save(ema_model.state_dict(), save_mode_path)
 
@@ -293,6 +305,9 @@ def train(args, snapshot_path):
         if iter_num >= max_iterations:
             iterator.close()
             break
+
+        time.sleep(0.003)
+
     writer.close()
     return "Training Finished!"
 

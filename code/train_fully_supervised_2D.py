@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--csv_path', type=str,
                     default='../csv_data/', help='root path of csv_data')
 parser.add_argument('--exp', type=str,
-                    default='/Fully_Supervised_3_10', help='experiment_name')
+                    default='/Fully_Supervised', help='experiment_name')
 parser.add_argument('--model', type=str,
                     default='LinkNetBaseWithDrop', help='model_name')
 parser.add_argument('--num_classes', type=int, default=2,
@@ -57,6 +57,8 @@ parser.add_argument('--patch_size', type=list, default=[512, 512],
                     help='patch size of network input')
 parser.add_argument('--seed', type=int, default=1337, help='random seed')
 parser.add_argument('--gpu', type=str, default='0', help='GPU to use')
+parser.add_argument('--normalize', type=bool, default=False,
+                    help='whether use normalize')
 
 # train data path and val data path
 parser.add_argument('--labeled_num', type=int, default=86,
@@ -79,10 +81,12 @@ def train(args, snapshot_path):
     max_epochs = args.num_epochs
     labeled_case = args.labeled_num
     iters_per_epoch = args.iters_per_epoch
+    is_normalize = args.normalize
 
     # Build network
     model = net_factory(net_type=args.model, in_chns=3,
                         class_num=num_classes)
+    model = model.cuda()
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
@@ -91,12 +95,15 @@ def train(args, snapshot_path):
     db_sup_train = BaseDataSets(base_dir=args.csv_path,
                                 csv_path=args.labeled_csv, split='train',
                                 crop_size=args.patch_size,
-                                num=None, target_mpp=0.848)
+                                num=None, target_mpp=0.848,
+                                is_normalize=is_normalize)
 
-    db_val = BaseDataSets(base_dir=args.csv_path, csv_path=args.val_data,
-                          split='val', num=None, target_mpp=0.848)
+    db_val = BaseDataSets(base_dir=args.csv_path,
+                          csv_path=args.val_data, split='val',
+                          num=None, target_mpp=0.848,
+                          is_normalize=is_normalize)
 
-    print("Total silices is: {}, labeled slices is: {}".format(
+    print("Total slices is: {}, labeled slices is: {}".format(
         8548, args.labeled_csv))
 
     # train data and val data pipeline: data loaders
@@ -178,7 +185,7 @@ def train(args, snapshot_path):
                                                       iter_num, round(best_performance, 4)))
                     save_best = os.path.join(snapshot_path,
                                              '{}_best_model.pth'.format(args.model))
-                    time.sleep(10)
+                    time.sleep(1)
                     torch.save(model.state_dict(), save_mode_path)
                     torch.save(model.state_dict(), save_best)
 
@@ -193,7 +200,7 @@ def train(args, snapshot_path):
             if iter_num % 2000 == 0:
                 save_mode_path = os.path.join(
                     snapshot_path, 'iter_' + str(iter_num) + '.pth')
-                time.sleep(10)
+                time.sleep(1)
                 torch.save(model.state_dict(), save_mode_path)
                 logging.info("save model to {}".format(save_mode_path))
 
@@ -202,6 +209,7 @@ def train(args, snapshot_path):
         if iter_num >= max_iterations:
             iterator.close()
             break
+        time.sleep(0.003)
     writer.close()
     return "Training Finished!"
 
