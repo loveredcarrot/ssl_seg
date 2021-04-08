@@ -83,10 +83,6 @@ parser.add_argument('--consistency', type=float,
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
 
-# mask proportion range
-parser.add_argument('--mask_prop_range', type=float, default=0.5,
-                    help='mask proportion range')
-
 args = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -104,6 +100,18 @@ def update_ema_variables(model, ema_model, alpha, global_step):
         ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
 
 
+def BoxMaskGenerator(mask_shape):
+    mask = np.zeros((mask_shape), dtype='uint8')
+    prop_th = random.randint(1, 9) / 10
+    prop_tw = random.randint(1, 9) / 10
+    th = int(mask_shape[2] * prop_th)
+    tw = int(mask_shape[3] * prop_tw)
+    i = random.randint(0, mask_shape[2] - th)
+    j = random.randint(0, mask_shape[3] - tw)
+    mask[:, :, i:i + th, j:j + th] = 1
+    return mask
+
+
 def train(args, snapshot_path):
     # Load parameter
     base_lr = args.base_lr
@@ -116,7 +124,6 @@ def train(args, snapshot_path):
     is_normalize = args.normalize
     labeled_bs = args.labeled_bs
     unlabeled_bs = batch_size - labeled_bs
-    mask_prop_range = args.mask_prop_range
 
     # Build network
     def create_model(ema=False):
@@ -197,14 +204,10 @@ def train(args, snapshot_path):
             unlabeled_volume_batch = unlabeled_volume_batch.cuda()
 
             # Convert mask parameters to masks of shape (N,1,H,W)
-            batch_mix_masks = torch.ones(unlabeled_volume_batch.shape[0] // 2, 1, unlabeled_volume_batch.shape[2],
+            batch_mix_shape = torch.ones(unlabeled_volume_batch.shape[0] // 2, 1, unlabeled_volume_batch.shape[2],
                                          unlabeled_volume_batch.shape[3])
-            batch_mix_masks[:, :,
-            int((batch_mix_masks.shape[2] - mask_prop_range * batch_mix_masks.shape[2]) // 2) \
-            :int((batch_mix_masks.shape[2] + mask_prop_range * batch_mix_masks.shape[2])) // 2,
-            int((batch_mix_masks.shape[3] - mask_prop_range * batch_mix_masks.shape[3]) // 2) \
-            :int((batch_mix_masks.shape[3] + mask_prop_range * batch_mix_masks.shape[3]) // 2)
-            ] = 0
+            batch_mix_masks = BoxMaskGenerator(batch_mix_shape)
+            batch_mix_masks = torch.from_numpy(batch_mix_masks).float()
             batch_mix_masks = batch_mix_masks.cuda()
 
             unlabeled_volume_batch_0 = unlabeled_volume_batch[0:unlabeled_bs // 2, ...]
