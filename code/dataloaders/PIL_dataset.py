@@ -47,6 +47,9 @@ class BaseDataSets(Dataset):
         if num is not None and self.split == 'train':
             self.sample_list = self.sample_list[:min(len(self.sample_list), num)]
         print("total {} samples in {} set".format(len(self.sample_list), self.split))
+        if self.split == 'train':
+            self.sample_list = self.sample_list * math.ceil(10000 / len(self.sample_list))
+            print("total {} samples in {} set".format(len(self.sample_list), self.split))
 
     def __len__(self):
         return len(self.sample_list)

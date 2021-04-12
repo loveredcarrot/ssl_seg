@@ -79,7 +79,7 @@ parser.add_argument('--ema_decay', type=float, default=0.99, help='ema_decay')
 parser.add_argument('--consistency_type', type=str,
                     default="mse", help='consistency_type')
 parser.add_argument('--consistency', type=float,
-                    default=1, help='consistency')
+                    default=5, help='consistency')
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
 

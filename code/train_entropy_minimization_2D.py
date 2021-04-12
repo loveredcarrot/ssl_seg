@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*- 
-# @Time : 2021/2/5 16:22 
+# @Time : 2021/4/8 15:26 
 # @Author : aurorazeng
-# @File : train_mean_teacher_2D.py 
+# @File : train_entropy_minimization_2D.py 
 # @license: (C) Copyright 2021-2026, aurorazeng; No reprobaiction without permission.
 
+# -*- coding: utf-8 -*-
+# @Time : 2021/4/1 14:52
+# @Author : aurorazeng
+# @File : train_entropy_minimization_2D.py
+# @license: (C) Copyright 2021-2026, aurorazeng; No reprobaiction without permission.
 
 import argparse
 import logging
@@ -38,7 +43,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--csv_path', type=str,
                     default='../csv_data/', help='root path of csv_data')
 parser.add_argument('--exp', type=str,
-                    default='/Mean_teacher', help='experiment_name')
+                    default='/Entropy_Minimization', help='experiment_name')
 parser.add_argument('--model', type=str,
                     default='LinkNetBaseWithDrop', help='model_name')
 parser.add_argument('--num_classes', type=int, default=2,
@@ -74,21 +79,13 @@ parser.add_argument('--unlabeled_csv', type=str, default='train_unlabeled_8462.t
 parser.add_argument('--val_data', type=str, default='val_no_negative.txt',
                     help='val_data_path')
 
-
 # Mean teacher parameters
-parser.add_argument('--ema_decay', type=float, default=0.99, help='ema_decay')
 parser.add_argument('--consistency_type', type=str,
-                    default="mse", help='consistency_type')
+                    default="entropy_minimization", help='consistency_type')
 parser.add_argument('--consistency', type=float,
                     default=1, help='consistency')
 parser.add_argument('--consistency_rampup', type=float,
                     default=60, help='consistency_rampup')
-
-# Gaussian noise
-parser.add_argument('--noise_variance', type=float,
-                    default=0, help='the gaussian noise variance')
-parser.add_argument('--noise_range', type=float,
-                    default=0, help='the range of gaussian noise')
 
 args = parser.parse_args()
 
@@ -98,13 +95,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 def get_current_consistency_weight(epoch):
     # Consistency ramp-up from https://arxiv.org/abs/1610.02242
     return args.consistency * ramps.sigmoid_rampup(epoch, args.consistency_rampup)
-
-
-def update_ema_variables(model, ema_model, alpha, global_step):
-    # Use the true average until the exponential average is more correct
-    alpha = min(1 - 1 / (global_step + 1), alpha)
-    for ema_param, param in zip(ema_model.parameters(), model.parameters()):
-        ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
 
 
 def train(args, snapshot_path):
@@ -119,23 +109,11 @@ def train(args, snapshot_path):
     is_normalize = args.normalize
     labeled_bs = args.labeled_bs
     unlabeled_bs = batch_size - labeled_bs
-    noise_variance = args.noise_variance
-    noise_range = args.noise_range
 
     # Build network
-    def create_model(ema=False):
-        # Network definition
-        model = net_factory(net_type=args.model, in_chns=3,
-                            class_num=num_classes)
-        if ema:
-            for param in model.parameters():
-                param.detach_()
-        return model
-
-    model = create_model()
-    ema_model = create_model(ema=True)
+    model = net_factory(net_type=args.model, in_chns=3,
+                        class_num=num_classes)
     model = model.cuda()
-    ema_model = ema_model.cuda()
 
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
@@ -156,7 +134,7 @@ def train(args, snapshot_path):
     db_val = BaseDataSets(base_dir=args.csv_path,
                           csv_path=args.val_data, split='val',
                           num=None, target_mpp=0.848,
-                          is_normalize = is_normalize)
+                          is_normalize=is_normalize)
 
     print("Total slices is: {}, labeled slices is: {}, unlabeled slices is: {}".format(
         8548, args.labeled_csv, args.unlabeled_csv))
@@ -174,7 +152,6 @@ def train(args, snapshot_path):
 
     # switch to train mode
     model.train()
-    ema_model.train()
 
     optimizer = optim.SGD(model.parameters(), lr=base_lr,
                           momentum=0.9, weight_decay=0.0001)
@@ -200,21 +177,10 @@ def train(args, snapshot_path):
             unlabeled_volume_batch = unlabeled_sampled_batch['image']
             unlabeled_volume_batch = unlabeled_volume_batch.cuda()
 
-            if noise_variance > 0.00001:
-                noise = torch.clamp(torch.randn_like(
-                    unlabeled_volume_batch) * noise_variance, -noise_range, noise_range)
-                ema_inputs = unlabeled_volume_batch + noise
-            else:
-                ema_inputs = unlabeled_volume_batch
-
             labeled_outputs = model(labeled_volume_batch)
             labeled_outputs_soft = torch.softmax(labeled_outputs, dim=1)
             unlabeled_outputs = model(unlabeled_volume_batch)
             unlabeled_outputs_soft = torch.softmax(unlabeled_outputs, dim=1)
-
-            with torch.no_grad():
-                ema_output = ema_model(ema_inputs)
-                ema_output_soft = torch.softmax(ema_output, dim=1)
 
             # supervised_loss
             loss_ce = ce_loss(labeled_outputs, label_batch[:].long())
@@ -223,16 +189,13 @@ def train(args, snapshot_path):
 
             # unsupervised_loss
             consistency_weight = get_current_consistency_weight(epoch_num)
-            consistency_loss = torch.mean((unlabeled_outputs_soft - ema_output_soft) ** 2)
+            consistency_loss = losses.entropy_loss(unlabeled_outputs_soft, C=2)
 
             # total loss
             loss = supervised_loss + consistency_weight * consistency_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-            # update ema mode variables
-            update_ema_variables(model, ema_model, args.ema_decay, iter_num)
 
             # update  learning rate
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
@@ -254,11 +217,11 @@ def train(args, snapshot_path):
                  (consistency_weight * consistency_loss)))
 
             if iter_num > 0 and iter_num % 500 == 0:
-                ema_model.eval()
+                model.eval()
                 metric_list = 0.0
                 for i_batch, sampled_batch in enumerate(valloader):
                     metric_i = test_single_volume(
-                        sampled_batch["image"], sampled_batch["label"], ema_model)
+                        sampled_batch["image"], sampled_batch["label"], model)
                     metric_list += np.array(metric_i)
                 metric_list = metric_list / len(db_val)
                 writer.add_scalar('info/val_dice', metric_list[0], iter_num)
@@ -277,9 +240,8 @@ def train(args, snapshot_path):
                     save_best = os.path.join(snapshot_path,
                                              '{}_best_model.pth'.format(args.model))
                     time.sleep(1)
-                    torch.save(ema_model.state_dict(), save_mode_path)
-                    torch.save(model.state_dict(), save_student_mode_path)
-                    torch.save(ema_model.state_dict(), save_best)
+                    torch.save(model.state_dict(), save_mode_path)
+                    torch.save(model.state_dict(), save_best)
 
                 logging.info(
                     'iteration %d : mean_dice : %f ' % (iter_num, performance))
@@ -287,16 +249,13 @@ def train(args, snapshot_path):
                     'iteration %d : mean_hd95 : %f ' % (iter_num, metric_list[1]))
                 logging.info(
                     'iteration %d : mean_asd : %f ' % (iter_num, metric_list[2]))
-                ema_model.train()
+                model.train()
 
             if iter_num % 2000 == 0:
                 save_mode_path = os.path.join(
                     snapshot_path, 'iter_' + str(iter_num) + '.pth')
-                save_student_mode_path = os.path.join(
-                    snapshot_path, 'iter_' + 'stu_' + str(iter_num) + '.pth')
                 time.sleep(1)
-                torch.save(model.state_dict(), save_student_mode_path)
-                torch.save(ema_model.state_dict(), save_mode_path)
+                torch.save(model.state_dict(), save_mode_path)
 
                 logging.info("save model to {}".format(save_mode_path))
 

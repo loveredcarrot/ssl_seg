@@ -15,7 +15,7 @@ import torch
 from tqdm import tqdm
 from medpy import metric
 
-# from networks import linknetBase
+# from networks import linkNetBase
 from networks.net_factory import net_factory
 
 parser = argparse.ArgumentParser()
@@ -29,6 +29,10 @@ parser.add_argument('--num_classes', type=int, default=2,
                     help='output channel of network')
 parser.add_argument('--labeled_num', type=int, default=1522,
                     help='labeled data')
+parser.add_argument('--gpu', type=str, default='0', help='GPU to use')
+
+args = parser.parse_args()
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
 
 def calculate_metric_percase(pred, gt):
