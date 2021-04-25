@@ -101,7 +101,7 @@ def update_ema_variables(model, ema_model, alpha, global_step):
 
 
 def BoxMaskGenerator(mask_shape):
-    mask = np.zeros((mask_shape), dtype='uint8')
+    mask = np.zeros(mask_shape, dtype='uint8')
     prop_th = random.randint(1, 9) / 10
     prop_tw = random.randint(1, 9) / 10
     th = int(mask_shape[2] * prop_th)
@@ -206,7 +206,7 @@ def train(args, snapshot_path):
             # Convert mask parameters to masks of shape (N,1,H,W)
             batch_mix_shape = torch.ones(unlabeled_volume_batch.shape[0] // 2, 1, unlabeled_volume_batch.shape[2],
                                          unlabeled_volume_batch.shape[3])
-            batch_mix_masks = BoxMaskGenerator(batch_mix_shape)
+            batch_mix_masks = BoxMaskGenerator(batch_mix_shape.shape)
             batch_mix_masks = torch.from_numpy(batch_mix_masks).float()
             batch_mix_masks = batch_mix_masks.cuda()
 
